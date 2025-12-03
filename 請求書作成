@@ -1,0 +1,267 @@
+Option Explicit
+
+'--- 初期設定 ---
+' Trueにすると、下のテスト用ファイルパスが使われる（開発者向け）
+Private Const IS_TEST_MODE As Boolean = True
+' テスト時に使用する「工事番号管理表.xlsm」（コピー元のマスターファイル）の場所
+Private Const m_TEST_FILE_PATH_FOR_TEST As String = "Z:\Users\n-machida\Desktop\工事番号管理表.xlsm"
+
+'--- シート名定義 ---
+Private Const m_IRAI_RIREKI_SHEET_NAME As String = "依頼履歴"
+Private Const m_IRAI_SEARCH_SHEET_NAME As String = "依頼検索" ' ★ 新しい定数
+Private Const m_SEIKYUUSHO_SHEET_NAME As String = "請求書" ' 請求書テンプレートシート名
+
+
+'================================================================================
+' 外部ファイルの「依頼履歴」をコピーし、ローカルシートを最新に更新するマクロ
+' ※請求書作成に必要なため、内部で呼び出されます。
+'================================================================================
+Sub UpdateKeiriRirekiSheet(Optional ByVal ShowMessage As Boolean = True)
+    Dim wbTarget As Workbook
+    Dim wsSource As Worksheet ' コピー元：外部ファイル（工事番号管理表）の「依頼履歴」シート
+    Dim wsDest As Worksheet   ' コピー先：このツール（経理用ファイル）内の「依頼履歴」シート
+    Dim targetFilePath As String
+    Dim lastRowSource As Long
+    Dim copyRange As Range
+    
+    Dim originalDisplayAlerts As Boolean
+    Dim originalEnableEvents As Boolean
+    Dim originalScreenUpdating As Boolean
+
+    ' --- 処理中の画面のちらつきや不要なメッセージを抑制し、高速化 ---
+    originalScreenUpdating = Application.ScreenUpdating
+    originalDisplayAlerts = Application.DisplayAlerts
+    originalEnableEvents = Application.EnableEvents
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.EnableEvents = False
+
+    On Error GoTo ErrorHandlerUpdateKeiriRireki
+
+    ' --- 1. 外部ファイルのパスを取得 ---
+    If IS_TEST_MODE Then
+        targetFilePath = m_TEST_FILE_PATH_FOR_TEST ' テストモード
+    Else
+        ' 通常モード：このツールの「依頼履歴」シート G1セルからパスを取得
+        targetFilePath = Trim(CStr(ThisWorkbook.Sheets(m_IRAI_RIREKI_SHEET_NAME).Range("G1").Value))
+    End If
+
+    ' ファイルが存在するかチェック
+    If Dir(targetFilePath) = "" Then
+        MsgBox "対象のファイルが見つかりません。" & vbCrLf & targetFilePath, vbCritical, "ファイルエラー"
+        GoTo FinalizeUpdateKeiriRireki
+    End If
+
+    ' --- 2. 外部ファイルを読み取り専用で開く ---
+    On Error Resume Next
+    Set wbTarget = Application.Workbooks.Open(fileName:=targetFilePath, ReadOnly:=True, UpdateLinks:=0)
+    On Error GoTo ErrorHandlerUpdateKeiriRireki
+
+    If wbTarget Is Nothing Then
+        MsgBox "対象のExcelファイルを開けませんでした。" & vbCrLf & _
+               "他のユーザーが使用中である可能性があります。", vbCritical
+        GoTo FinalizeUpdateKeiriRireki
+    End If
+
+    ' --- 3. 必要なシートの存在チェック ---
+    If Not SheetExists(wbTarget, m_IRAI_RIREKI_SHEET_NAME) Then
+        MsgBox "外部ファイルに必要なシート「" & m_IRAI_RIREKI_SHEET_NAME & "」が見つかりません。", vbCritical, "シートエラー"
+        GoTo FinalizeUpdateKeiriRireki
+    End If
+    Set wsSource = wbTarget.Sheets(m_IRAI_RIREKI_SHEET_NAME)
+    
+    If Not SheetExists(ThisWorkbook, m_IRAI_RIREKI_SHEET_NAME) Then
+        MsgBox "このファイルにコピー先のシート「" & m_IRAI_RIREKI_SHEET_NAME & "」が見つかりませんでした。", vbExclamation
+        GoTo FinalizeUpdateKeiriRireki
+    End If
+    Set wsDest = ThisWorkbook.Sheets(m_IRAI_RIREKI_SHEET_NAME)
+
+    ' --- 4. データのコピー処理を実行 ---
+    wsDest.Unprotect
+    ' ローカルのヘッダー行（2行目）を除いてクリア
+    wsDest.Range("A3:W" & wsDest.Rows.Count).Clear
+
+    lastRowSource = wsSource.Cells(wsSource.Rows.Count, "A").End(xlUp).Row
+
+    ' 外部ファイルのデータ開始行（2行目）から最終行までをコピー
+    If lastRowSource < 2 Then ' データ行が2行目未満（データがない）場合はコピーしない
+        Set copyRange = Nothing
+    Else
+        Set copyRange = wsSource.Range("A2:W" & lastRowSource)
+    End If
+
+    If Not copyRange Is Nothing Then
+        ' ローカルのデータ開始行（3行目）に貼り付け
+        copyRange.Copy Destination:=wsDest.Range("A3")
+    End If
+
+    
+    If ShowMessage Then
+        MsgBox "「" & m_IRAI_RIREKI_SHEET_NAME & "」シートが（外部ファイル）から正常に更新されました。", vbInformation, "更新完了"
+    End If
+
+
+FinalizeUpdateKeiriRireki:
+    ' --- 後片付け ---
+    Application.CutCopyMode = False
+    If Not wsSource Is Nothing Then Set wsSource = Nothing
+    If Not wsDest Is Nothing Then Set wsDest = Nothing
+    If Not wbTarget Is Nothing Then wbTarget.Close SaveChanges:=False
+
+    ' --- Excelの設定を元に戻す ---
+    Application.ScreenUpdating = originalScreenUpdating
+    Application.DisplayAlerts = originalDisplayAlerts
+    Application.EnableEvents = originalEnableEvents
+    Exit Sub
+
+ErrorHandlerUpdateKeiriRireki:
+    MsgBox "「" & m_IRAI_RIREKI_SHEET_NAME & "」シート（経理用）の更新中にエラーが発生しました: " & Err.Description, vbCritical, "更新エラー"
+    Resume FinalizeUpdateKeiriRireki
+End Sub
+
+
+'================================================================================
+' 依頼履歴の一覧から請求書を作成するマクロ
+'================================================================================
+Sub CreateSeikyuusho(Optional ByVal ShowMessage As Boolean = True)
+    Dim wsRireki As Worksheet           ' 依頼履歴シート
+    Dim wsSearch As Worksheet           ' 依頼検索シート ★ 検索キー取得用
+    Dim wsSeikyuushoTemplate As Worksheet ' 請求書テンプレートシート
+    Dim wbNew As Workbook               ' 新しく作成されるブック
+    Dim wsNewSeikyuusho As Worksheet    ' 新しく作成される請求書シート
+    Dim targetIraiNo As String          ' 検索対象の依頼NO
+    Dim foundRange As Range             ' 検索結果のセル
+    Dim dataRow As Long                 ' データが見つかった行番号
+    Dim fileName As Variant             ' 保存ファイル名
+    
+    Dim originalDisplayAlerts As Boolean
+    Dim originalEnableEvents As Boolean
+    
+    ' --- 処理中の画面のちらつきや不要なメッセージを抑制し、高速化 ---
+    Application.ScreenUpdating = False
+    originalDisplayAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    originalEnableEvents = Application.EnableEvents
+    Application.EnableEvents = False
+
+    On Error GoTo ErrorHandlerSeikyuusho
+
+    ' --- 1. 依頼履歴を最新に更新 ---
+    Call UpdateKeiriRirekiSheet(False) ' メッセージ非表示で更新
+    
+    ' --- 2. 必要なシートを取得 ---
+    If Not SheetExists(ThisWorkbook, m_IRAI_RIREKI_SHEET_NAME) Or _
+       Not SheetExists(ThisWorkbook, m_SEIKYUUSHO_SHEET_NAME) Or _
+       Not SheetExists(ThisWorkbook, m_IRAI_SEARCH_SHEET_NAME) Then
+        MsgBox "このファイルに「" & m_IRAI_RIREKI_SHEET_NAME & "」または「" & m_SEIKYUUSHO_SHEET_NAME & "」（テンプレート）、「" & m_IRAI_SEARCH_SHEET_NAME & "」が見つかりません。", vbCritical
+        GoTo FinalizeSeikyuusho
+    End If
+    
+    Set wsRireki = ThisWorkbook.Sheets(m_IRAI_RIREKI_SHEET_NAME)
+    Set wsSearch = ThisWorkbook.Sheets(m_IRAI_SEARCH_SHEET_NAME)
+    Set wsSeikyuushoTemplate = ThisWorkbook.Sheets(m_SEIKYUUSHO_SHEET_NAME)
+
+    ' --- 3. 検索対象の依頼NOを取得 ---
+    targetIraiNo = Trim(CStr(wsSearch.Range("A2").Value))
+    
+    If targetIraiNo = "" Then
+        MsgBox "「" & m_IRAI_SEARCH_SHEET_NAME & "」シートのA2セルに依頼NOを入力してください。", vbExclamation
+        GoTo FinalizeSeikyuusho
+    End If
+
+    ' --- 4. 依頼履歴シートから該当データを検索 ---
+    Set foundRange = wsRireki.Columns("A").Find(What:=targetIraiNo, LookIn:=xlValues, LookAt:=xlWhole, After:=wsRireki.Cells(2, "A"))
+    
+    If foundRange Is Nothing Then
+        MsgBox "依頼NO「" & targetIraiNo & "」に一致するデータが「" & m_IRAI_RIREKI_SHEET_NAME & "」シートに見つかりませんでした。", vbExclamation
+        GoTo FinalizeSeikyuusho
+    End If
+    
+    dataRow = foundRange.Row ' データが見つかった行番号
+
+    ' --- 5. 請求書テンプレートを新しいブックにコピー ---
+    wsSeikyuushoTemplate.Copy
+    ' 新しいブックは自動的にアクティブになり、その中のシートがActiveSheetになる
+    Set wbNew = ActiveWorkbook
+    Set wsNewSeikyuusho = wbNew.Sheets(1)
+    
+    ' 新しいシート名を「請求書」とする（コピー前にテンプレート名が付いているため変更）
+    wsNewSeikyuusho.Name = "請求書"
+    
+    ' --- 6. データを請求書に転記 ---
+    With wsNewSeikyuusho
+        ' 【お客様指定のセルのみを転記】
+        .Range("C5").Value = wsRireki.Cells(dataRow, "P").Value    ' 請求書提出先 (P列)
+        .Range("C18").Value = wsRireki.Cells(dataRow, "F").Value   ' 工事名称 (F列)
+        .Range("AF1").Value = wsRireki.Cells(dataRow, "B").Value   ' 請求書番号（経理用） (B列)
+        .Range("AG15").Value = wsRireki.Cells(dataRow, "D").Value  ' 担当者 (D列)
+        
+        ' ※その他の項目（住所、郵便番号、金額、日付など）の転記は要望により除外されています。
+        
+    End With
+
+    ' --- 7. 新しいブックを保存 ---
+    wbNew.Activate
+    ' デフォルトのファイル名を生成
+    Dim defaultFileName As String
+    defaultFileName = "請求書_" & Replace(targetIraiNo, "/", "_") & "_" & Format(Date, "yyyymmdd") & ".xlsx"
+    
+    ' ファイル保存ダイアログを表示
+    fileName = Application.GetSaveAsFilename(InitialFileName:=defaultFileName, FileFilter:="Excel Files (*.xlsx), *.xlsx")
+
+    If fileName <> False Then
+        wbNew.SaveAs fileName:=fileName, FileFormat:=xlOpenXMLWorkbook
+        wbNew.Close SaveChanges:=False
+    Else
+        ' キャンセルされた場合は保存せずに閉じる
+        wbNew.Close SaveChanges:=False
+        If ShowMessage Then MsgBox "請求書作成をキャンセルしました。", vbExclamation, "キャンセル"
+        GoTo FinalizeSeikyuusho
+    End If
+    
+    If ShowMessage Then
+        MsgBox "依頼NO「" & targetIraiNo & "」の請求書を新しいファイルとして保存しました。", vbInformation, "完了"
+    End If
+
+FinalizeSeikyuusho: ' 終了処理
+    Application.DisplayAlerts = originalDisplayAlerts
+    Application.EnableEvents = originalEnableEvents
+    Application.ScreenUpdating = True
+    Exit Sub
+
+ErrorHandlerSeikyuusho: ' エラー発生時の処理
+    ' エラーが発生した場合、新しく開いたブックを閉じる試み
+    If Not wbNew Is Nothing Then
+        On Error Resume Next ' 閉じる処理のエラーは無視
+        wbNew.Close SaveChanges:=False
+        On Error GoTo ErrorHandlerSeikyuusho
+    End If
+    
+    MsgBox "請求書作成中に予期せぬエラーが発生しました: " & Err.Description, vbCritical
+    Resume FinalizeSeikyuusho
+End Sub
+
+'================================================================================
+' 【一括実行用】依頼履歴の更新と請求書の作成を連続で実行するマクロ
+'================================================================================
+Sub ExecuteSeikyuushoProcess()
+    ' 1. 依頼履歴を最新に更新 (メッセージを表示)
+    Call UpdateKeiriRirekiSheet(True)
+    
+    ' 2. 請求書の作成を実行 (メッセージを表示)
+    Call CreateSeikyuusho(True)
+End Sub
+
+
+' 補足：シート存在チェック用の関数
+Private Function SheetExists(ByVal wb As Workbook, ByVal sheetName As String) As Boolean
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Sheets(sheetName)
+    On Error GoTo 0
+    SheetExists = Not ws Is Nothing
+End Function
+
+
+  
