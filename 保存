@@ -1,125 +1,146 @@
 Option Explicit
 
-'=========================================================
-' 設定エリア：保存先やファイル名の設定
-'=========================================================
-' ファイル名として使用するセル（レギュラーな請求書モジュールと合わせる：AK1）
+' 設定：保存ファイル名と経理用番号が記載されているセル
 Private Const CELL_FILENAME As String = "AK1"
-'=========================================================
+Private Const CELL_KEIRI_NO As String = "AF1"
 
-
-'=========================================================
-' 【メイン】保存実行マクロ
-' 現在のアクティブシートを新しいブックとして保存して閉じます
-'=========================================================
+'================================================================================
+' 保存処理（既存ブックへの追加対応版）
+'================================================================================
 Sub 保存_印刷作業()
     Dim targetSheet As Worksheet
     Dim fileName As String
-    Dim saveFolderPath As String '保存先パス格納用
+    Dim folderPath As String
     Dim fullPath As String
-    Dim rc As Integer
     
-    ' 対象は現在開いている（アクティブな）シート
     Set targetSheet = ActiveSheet
     
-    ' 【安全装置】システム用のシートを誤って保存しないようにチェック
-    If targetSheet.Name = "依頼検索" Or targetSheet.Name = "作成選択" Or targetSheet.Name = "入力画面" Then
-        MsgBox "このシートは保存できません。" & vbCrLf & _
-               "作成された「請求書シート」を選択してから実行してください。", vbExclamation
+    ' 1. 安全装置：システム用シートを誤って移動・削除させない
+    If targetSheet.Name = "依頼検索" Or targetSheet.Name = "作成選択" Or targetSheet.Name = "入力画面" Or targetSheet.Name = "依頼履歴" Or targetSheet.Name = "部署マスタ" Then
+        MsgBox "このシート（システム用）は保存できません。" & vbCrLf & _
+               "作成された「請求書シート」を表示してから実行してください。", vbExclamation
         Exit Sub
     End If
 
-    ' 1. 保存先パスの取得（依頼検索シートのB1セル）
+    ' 2. 保存先情報の取得
     On Error Resume Next
-    saveFolderPath = Worksheets("依頼検索").Range("B1").Value
+    folderPath = ThisWorkbook.Worksheets("依頼検索").Range("B1").Value
+    fileName = targetSheet.Range(CELL_FILENAME).Value
     On Error GoTo 0
     
-    ' 保存先パスのチェック
-    If saveFolderPath = "" Then
-        MsgBox "「依頼検索」シートのB1セル（保存先フォルダ）が空です。" & vbCrLf & _
-               "保存先を入力してから実行してください。", vbExclamation
-        Exit Sub
-    End If
-    ' パス末尾の￥マーク対策（もしついていなければ、あとで付与するのでここでは削除しておくなどの処理も可能だが、
-    ' 今回はそのまま結合時に調整します）
-
-
-    ' 2. ファイル名の取得チェック
-    fileName = targetSheet.Range(CELL_FILENAME).Value
-    If fileName = "" Then
-        MsgBox "ファイル名（" & CELL_FILENAME & "セル）が空のため保存できません。", vbExclamation
+    If folderPath = "" Or fileName = "" Then
+        MsgBox "保存先フォルダ、またはファイル名が設定されていません。" & vbCrLf & _
+               "依頼検索シートのB1セル、または請求書のAK1セルを確認してください。", vbExclamation
         Exit Sub
     End If
     
-    ' 確認メッセージ
-    rc = MsgBox("現在のシートを以下の設定で保存しますか？" & vbCrLf & vbCrLf & _
-                "・ファイル名：" & fileName & vbCrLf & _
-                "・保存先：" & saveFolderPath, vbYesNo + vbQuestion, "保存確認")
-    If rc = vbNo Then Exit Sub
+    ' パス末尾の調整
+    If Right(folderPath, 1) <> "\" Then
+        folderPath = folderPath & "\"
+    End If
+    fullPath = folderPath & fileName & ".xlsx"
 
+    ' 3. 実行確認
+    If MsgBox("この請求書を保存しますか？" & vbCrLf & "※マスター（工事番号管理表）への同期も行います。", vbYesNo + vbQuestion, "保存の確認") = vbNo Then
+        Exit Sub
+    End If
+
+    ' 4. マスター側への同期（請求書番号の書き戻し）
+    If SyncInvoiceNoToMaster(targetSheet) = False Then
+        If MsgBox("マスターへの同期に失敗しましたが、ファイルの保存だけ続行しますか？", vbYesNo + vbQuestion) = vbNo Then
+            Exit Sub
+        End If
+    End If
 
     Application.ScreenUpdating = False
     
-    ' 3. シート名の変更
-    ' シート名を「保存ファイル名」と同じにする
+    ' 5. シート名の確定（保存ファイル名と一致させる）
     On Error Resume Next
     targetSheet.Name = fileName
-    On Error GoTo 0
-    
-    ' 4. 保存パスの組み立て
-    ' 末尾に \ があるかどうかで結合の仕方を変える（安全策）
-    If Right(saveFolderPath, 1) = "\" Then
-        fullPath = saveFolderPath & fileName
-    Else
-        fullPath = saveFolderPath & "\" & fileName
+    If Err.Number <> 0 Then
+        targetSheet.Name = fileName & "_" & Format(Now, "hhnnss")
     End If
-    
-    ' 5. シートを新しいブックに「移動」させる
-    ' （元のブックからシートがなくなり、新しいブックが作成されます）
-    targetSheet.Move
-    
-    ' 6. 保存実行
+    On Error GoTo 0
+
+    ' 6. ファイル保存ロジック（既存への追加 or 新規作成）
     On Error GoTo SaveError
     
-    ' 保存形式：マクロなしExcelブック (xlsx)
-    ActiveWorkbook.SaveAs fileName:=fullPath, FileFormat:=xlOpenXMLWorkbook
-    
-    ' 7. 保存したブックを閉じる
-    ActiveWorkbook.Close SaveChanges:=False
+    If Dir(fullPath) <> "" Then
+        ' 既存ファイルあり：そのファイルの末尾にシートを追加
+        Dim wbEx As Workbook
+        Set wbEx = Workbooks.Open(fileName:=fullPath, UpdateLinks:=0)
+        targetSheet.Move After:=wbEx.Sheets(wbEx.Sheets.Count)
+        wbEx.Close SaveChanges:=True
+    Else
+        ' 新規ファイル：新しいブックとして保存
+        targetSheet.Move
+        ActiveWorkbook.SaveAs fileName:=fullPath, FileFormat:=xlOpenXMLWorkbook
+        ActiveWorkbook.Close SaveChanges:=False
+    End If
     
     Application.ScreenUpdating = True
-    
-    ' 元のブックに戻ってきたので完了メッセージ
-    MsgBox "保存が完了しました。", vbInformation
+    MsgBox "保存とマスターへの同期が完了しました。" & vbCrLf & "作成用シートは移動（クリーンアップ）されました。", vbInformation
     Exit Sub
 
 SaveError:
     Application.ScreenUpdating = True
-    MsgBox "保存中にエラーが発生しました。" & vbCrLf & _
-           "・保存先パス（依頼検索B1）が正しいか" & vbCrLf & _
-           "・フォルダが存在するか" & vbCrLf & _
-           "・同名のファイルが開かれていないか" & vbCrLf & _
-           "確認してください。" & vbCrLf & vbCrLf & _
+    MsgBox "保存処理中にエラーが発生しました。" & vbCrLf & _
            "エラー内容：" & Err.Description, vbCritical
-    ' エラー時は移動したシートが新しいブックとして開いたままになります
 End Sub
 
-
-'=========================================================
-' 【サブ】印刷実行マクロ
-'=========================================================
-Sub 印刷()
-    Dim rc As Integer
+' 外部マスター同期（請求書番号のみ確定時に同期）
+Private Function SyncInvoiceNoToMaster(ByVal wsInv As Worksheet) As Boolean
+    Dim mPath As String
+    Dim wbM As Workbook
+    Dim wsM As Worksheet
+    Dim irNo As String
+    Dim invNo As Variant
+    Dim f As Range
     
-    ' 念のため確認を入れる
-    rc = MsgBox("現在のシートを印刷しますか？", vbYesNo + vbQuestion, "印刷確認")
+    SyncInvoiceNoToMaster = False
+    On Error GoTo SyncError
     
-    If rc = vbYes Then
-        ' プレビューを表示せずに直接印刷する場合
-        ActiveWindow.SelectedSheets.PrintOut Copies:=1, Collate:=True, IgnorePrintAreas:=False
-        
-        ' ※もしプレビュー画面を出したい場合は以下を使ってください
-        ' ActiveWindow.SelectedSheets.PrintPreview
+    irNo = Trim(ThisWorkbook.Sheets("依頼検索").Range("A2").Value)
+    invNo = wsInv.Range(CELL_KEIRI_NO).Value
+    
+    ' 「シート更新」モジュールの共通関数 GetMasterPath を利用
+    mPath = GetMasterPath()
+    
+    If Dir(mPath) = "" Then
+        Exit Function
     End If
-End Sub
 
+    ' マスターを開く
+    Set wbM = Nothing
+    On Error Resume Next
+    Set wbM = Workbooks(Dir(mPath))
+    On Error GoTo SyncError
+    
+    If wbM Is Nothing Then
+        Set wbM = Workbooks.Open(fileName:=mPath, ReadOnly:=False)
+    End If
+    
+    Set wsM = wbM.Sheets(m_IRAI_RIREKI_SHEET_NAME)
+    Set f = wsM.Columns("A").Find(What:=irNo, LookIn:=xlValues, LookAt:=xlWhole)
+    
+    If Not f Is Nothing Then
+        ' 請求書番号はB列
+        wsM.Cells(f.Row, "B").Value = invNo
+        wbM.Save
+        SyncInvoiceNoToMaster = True
+    End If
+    
+    wbM.Close SaveChanges:=False
+    Exit Function
+
+SyncError:
+    SyncInvoiceNoToMaster = False
+End Function
+
+' 印刷実行
+Sub 印刷()
+    If MsgBox("現在表示されているシートを印刷しますか？", vbYesNo + vbQuestion, "印刷の確認") = vbNo Then
+        Exit Sub
+    End If
+    ActiveWindow.SelectedSheets.PrintOut Copies:=1, Collate:=True
+End Sub
