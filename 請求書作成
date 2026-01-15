@@ -1,11 +1,10 @@
 Option Explicit
 
 '=========================================================
-' 設定エリア：転記先のセル番地などをここで一括管理します
-' ※実際の請求書シートのレイアウトに合わせて変更してください
+' 設定エリア：転記先のセル番地などを一括管理
 '=========================================================
 '--- 参照元（依頼検索シート）のセル ---
-Private Const SRC_KEIRI_NO As String = "A7"     '請求書番号（経理用）
+Private Const SRC_KEIRI_NO As String = "A5"     '請求書番号（経理用）
 Private Const SRC_DATE_SUBMISSION As String = "E7" '提出日付
 Private Const SRC_STAFF_NAME As String = "C5"   '担当者
 Private Const SRC_PROJECT_NO As String = "D5"   '工事番号
@@ -16,24 +15,21 @@ Private Const SRC_AMOUNT As String = "H5"       '請負金額
 Private Const SRC_DESTINATION As String = "G7"  '宛先
 
 '--- 転記先（請求書シート）のセル ---
-'基本情報
 Private Const DEST_KEIRI_NO As String = "AF1"       '請求書№
 Private Const DEST_DATE_YEAR As String = "AB3"      '年
 Private Const DEST_DATE_MONTH As String = "AE3"     '月
 Private Const DEST_DATE_DAY As String = "AG3"       '日
-
 Private Const DEST_DESTINATION As String = "C5:N5"  '宛先
 Private Const DEST_HONORIFIC As String = "O5"       '敬称セル
-
 Private Const DEST_DEPT_NAME As String = "AB15:AD15" '担当部署
 Private Const DEST_STAFF_NAME As String = "AG15:AH15" '担当者名
 Private Const DEST_PROJECT_NAME As String = "C18:T18" '工事名称
 Private Const DEST_SUBJECT As String = "F19"        '件名
 Private Const DEST_AMOUNT As String = "AA19:AE19"   '金額
 Private Const DEST_PROJECT_NO As String = "AK2"     '工事番号
-Private Const DEST_FILENAME_CELL As String = "AK1"  '保存ファイル名が生成されるセル
+Private Const DEST_FILENAME_CELL As String = "AK1"  '保存ファイル名セル
 
-'--- 工期（日付分解用）の転記先セル ---
+'--- 工期転記先（日付分解用） ---
 Private Const DEST_TERM_YEAR As String = "A18"          '18行目：西暦
 Private Const DEST_TERM_START_MONTH As String = "A19"   '19行目：着手月
 Private Const DEST_TERM_START_DAY As String = "B19"     '19行目：着手日
@@ -41,11 +37,9 @@ Private Const DEST_TERM_TILDE As String = "B20"         '20行目：～
 Private Const DEST_TERM_END_YEAR As String = "A20"      '20行目：完成年
 Private Const DEST_TERM_END_MONTH As String = "A21"     '21行目：完成月
 Private Const DEST_TERM_END_DAY As String = "B21"       '21行目：完成日
-'=========================================================
-
 
 '=========================================================
-' 【メイン1】請求書作成メニュー（選んで作成）
+' 【メイン】請求書作成メニュー
 '=========================================================
 Sub 請求書作成メニュー()
     Dim wsMenu As Worksheet
@@ -57,6 +51,7 @@ Sub 請求書作成メニュー()
     
     Application.ScreenUpdating = False
     
+    ' 既存の選択シートがあれば削除
     On Error Resume Next
     Application.DisplayAlerts = False
     Worksheets("作成選択").Delete
@@ -99,138 +94,128 @@ Sub 請求書作成メニュー()
     
     ActiveWindow.DisplayGridlines = False
     wsMenu.Range("A1").Select
-    
     Application.ScreenUpdating = True
 End Sub
 
 '=========================================================
-' 【メイン2】全種類一括作成
-'=========================================================
-Sub 全種類一括作成()
-    Dim rc As Integer
-    rc = MsgBox("全5種類の請求書を一括で作成しますか？" & vbCrLf & _
-                "（「様/御中」の確認が必要な場合はポップアップが表示されます）", vbYesNo + vbQuestion)
-    If rc = vbNo Then Exit Sub
-    
-    Application.ScreenUpdating = False
-    
-    Call CreateInvoiceFromTemplate("請求書")
-    Call CreateInvoiceFromTemplate("請求書(振込手数料有)")
-    Call CreateInvoiceFromTemplate("請求書(領収有)")
-    Call CreateInvoiceFromTemplate("請求書(領収有・振込手数料有）")
-    Call CreateInvoiceFromTemplate("但陽信用金庫")
-    
-    Application.ScreenUpdating = True
-    
-    MsgBox "全ての請求書の作成が完了しました。", vbInformation
-End Sub
-
-
-'=========================================================
-' 【内部処理】ボタンクリック時に実行される処理
+' 【内部】選択確定後の生成処理
 '=========================================================
 Sub GenerateFromSelection()
     Dim wsMenu As Worksheet
-    Dim isSelected(1 To 5) As Boolean
     Dim i As Integer
-    Dim chkName As String
     Dim anySelected As Boolean
+    Dim isSelected(1 To 5) As Boolean
     
-    Set wsMenu = ActiveSheet
+    On Error Resume Next
+    Set wsMenu = Worksheets("作成選択")
+    On Error GoTo 0
+    
+    If wsMenu Is Nothing Then
+        Exit Sub
+    End If
     
     anySelected = False
     For i = 1 To 5
-        chkName = "chkOption_" & i
         On Error Resume Next
-        If wsMenu.CheckBoxes(chkName).Value = xlOn Then
+        If wsMenu.CheckBoxes("chkOption_" & i).Value = xlOn Then
             isSelected(i) = True
             anySelected = True
-        Else
-            isSelected(i) = False
         End If
         On Error GoTo 0
     Next i
     
-    If Not anySelected Then
+    If anySelected = False Then
         MsgBox "作成する請求書が選択されていません。", vbExclamation
         Exit Sub
     End If
     
+    ' 1. 自動採番を実行
+    Call AssignAccountingInvoiceNo
+    
+    ' 2. メニューシートを削除
     Application.DisplayAlerts = False
     wsMenu.Delete
     Application.DisplayAlerts = True
     
     Application.ScreenUpdating = False
     
-    If isSelected(1) Then Call CreateInvoiceFromTemplate("請求書")
-    If isSelected(2) Then Call CreateInvoiceFromTemplate("請求書(振込手数料有)")
-    If isSelected(3) Then Call CreateInvoiceFromTemplate("請求書(領収有)")
-    If isSelected(4) Then Call CreateInvoiceFromTemplate("請求書(領収有・振込手数料有）")
-    If isSelected(5) Then Call CreateInvoiceFromTemplate("但陽信用金庫")
+    ' 3. テンプレートからシートを生成
+    If isSelected(1) = True Then
+        Call CreateInvoiceFromTemplate("請求書")
+    End If
+    If isSelected(2) = True Then
+        Call CreateInvoiceFromTemplate("請求書(振込手数料有)")
+    End If
+    If isSelected(3) = True Then
+        Call CreateInvoiceFromTemplate("請求書(領収有)")
+    End If
+    If isSelected(4) = True Then
+        Call CreateInvoiceFromTemplate("請求書(領収有・振込手数料有）")
+    End If
+    If isSelected(5) = True Then
+        Call CreateInvoiceFromTemplate("但陽信用金庫")
+    End If
     
     Application.ScreenUpdating = True
-    
-    MsgBox "選択された請求書の作成が完了しました。", vbInformation
+    MsgBox "請求書の作成が完了しました。", vbInformation
 End Sub
 
+'=========================================================
+' 請求書番号（経理用）の自動採番
+'=========================================================
+Public Sub AssignAccountingInvoiceNo()
+    Dim wsRireki As Worksheet: Set wsRireki = ThisWorkbook.Sheets("依頼履歴")
+    Dim wsSearch As Worksheet: Set wsSearch = ThisWorkbook.Sheets("依頼検索")
+    Dim lastRow As Long, maxNo As Double, f As Range
+    Dim irNo As String: irNo = Trim(wsSearch.Range("A2").Value)
+
+    If irNo = "" Then Exit Sub
+    If wsSearch.Range("A5").Value <> "" Then Exit Sub
+
+    lastRow = wsRireki.Cells(wsRireki.Rows.Count, "B").End(xlUp).Row
+    If lastRow < 3 Then
+        maxNo = 0
+    Else
+        maxNo = Application.WorksheetFunction.Max(wsRireki.Range("B3:B" & lastRow))
+    End If
+    
+    wsSearch.Range("A5").Value = Int(maxNo) + 1
+    
+    Set f = wsRireki.Columns("A").Find(What:=irNo, LookIn:=xlValues, LookAt:=xlWhole)
+    If Not f Is Nothing Then
+        wsRireki.Cells(f.Row, "B").Value = wsSearch.Range("A5").Value
+    End If
+End Sub
 
 '=========================================================
-' 指定されたテンプレートから請求書を作成する処理
+' テンプレートコピーと転記
 '=========================================================
 Private Sub CreateInvoiceFromTemplate(templateName As String)
-    Dim wsSrc As Worksheet
-    Dim newSheetName As String
-    
-    On Error Resume Next
-    Set wsSrc = Worksheets("依頼検索")
-    If wsSrc Is Nothing Then
-        MsgBox "「依頼検索」シートが見つかりません。", vbCritical
-        Exit Sub
-    End If
-    On Error GoTo 0
-
-    ' テンプレートのコピー
-    Sheets(templateName).Select
+    Dim wsSrc As Worksheet: Set wsSrc = Worksheets("依頼検索")
     Sheets(templateName).Copy After:=wsSrc
-    
-    ' 共通転記処理（ここでAK1にファイル名がセットされます）
     Call TransferData(wsSrc, ActiveSheet)
     
-    '-----------------------------------------------------
-    ' 【シート名変更処理】
-    ' 作成完了直後に、AK1セル（保存ファイル名）と同じ名前に変更します
-    '-----------------------------------------------------
-    newSheetName = ActiveSheet.Range(DEST_FILENAME_CELL).Value
-    
-    If newSheetName <> "" Then
-        On Error Resume Next
-        ' シート名を変更を試みる
-        ActiveSheet.Name = newSheetName
-        
-        ' もしエラーが出た場合（＝同名のシートが既にある場合など）
-        If Err.Number <> 0 Then
-            ' 後ろに現在時刻(分秒)をつけて、無理やり重複しない名前にして変更する
-            ActiveSheet.Name = newSheetName & "_" & Format(Now, "nnss")
-        End If
-        On Error GoTo 0
+    Dim newName As String: newName = ActiveSheet.Range(DEST_FILENAME_CELL).Value
+    On Error Resume Next
+    ActiveSheet.Name = newName
+    If Err.Number <> 0 Then
+        ActiveSheet.Name = newName & "_" & Format(Now, "hhnnss")
     End If
+    On Error GoTo 0
     
     Range("A18").Select
 End Sub
 
-
 '=========================================================
-' 共通転記処理プロシージャ
+' 共通転記処理（省略なしの完全版）
 '=========================================================
 Private Sub TransferData(wsSource As Worksheet, wsDest As Worksheet)
-    
     '--- 基本項目の転記 ---
     wsDest.Range(DEST_KEIRI_NO).Value = wsSource.Range(SRC_KEIRI_NO).Value
     
-    ' 日付（提出日）
+    ' 日付（提出日）の分解
     Dim dSub As Variant
     dSub = wsSource.Range(SRC_DATE_SUBMISSION).Value
-    
     If IsDate(dSub) Then
         wsDest.Range(DEST_DATE_YEAR).Value = Year(dSub)
         wsDest.Range(DEST_DATE_MONTH).Value = Month(dSub)
@@ -238,32 +223,30 @@ Private Sub TransferData(wsSource As Worksheet, wsDest As Worksheet)
     End If
     
     ' 宛先
-    Dim destRange As Range
-    Set destRange = wsDest.Range(DEST_DESTINATION)
+    Dim destName As String: destName = wsSource.Range(SRC_DESTINATION).Value
+    wsDest.Range(DEST_DESTINATION).Value = destName
     
-    Dim destName As String
-    destName = wsSource.Range(SRC_DESTINATION).Value
-    destRange.Value = destName
+    ' 敬称（ポップアップ維持）
+    wsDest.Range(DEST_HONORIFIC).Value = DetermineHonorific(destName)
+
+    ' 部署マスタ連携（工事番号先頭2桁）
+    Dim pNo As String: pNo = wsSource.Range(SRC_PROJECT_NO).Value
+    Dim deptV: On Error Resume Next
+    deptV = Application.VLookup(Left(pNo, 2), ThisWorkbook.Sheets("部署マスタ").Range("A:B"), 2, False)
+    On Error GoTo 0
+    wsDest.Range(DEST_DEPT_NAME).Value = IIf(IsError(deptV) Or deptV = "", "建築事業部", deptV)
     
-    ' 敬称
-    Dim honorificRange As Range
-    Set honorificRange = wsDest.Range(DEST_HONORIFIC)
-    honorificRange.Value = DetermineHonorific(destName)
-    
-    wsDest.Range(DEST_DEPT_NAME).Value = "建築事業部"
     wsDest.Range(DEST_STAFF_NAME).Value = wsSource.Range(SRC_STAFF_NAME).Value
     wsDest.Range(DEST_PROJECT_NAME).Value = wsSource.Range(SRC_PROJECT_NAME).Value
     wsDest.Range(DEST_SUBJECT).Value = "上記工事代"
     
-    If IsNumeric(wsSource.Range(SRC_AMOUNT).Value) Then
+    If IsNumeric(wsSource.Range(SRC_AMOUNT).Value) = True Then
         wsDest.Range(DEST_AMOUNT).Value = wsSource.Range(SRC_AMOUNT).Value / 1.1
     End If
+    wsDest.Range(DEST_PROJECT_NO).Value = pNo
     
-    wsDest.Range(DEST_PROJECT_NO).Value = wsSource.Range(SRC_PROJECT_NO).Value
-    
-    '--- 工期 ---
-    Dim dStart As Variant
-    Dim dEnd As Variant
+    '--- 工期（日付分解転記） ---
+    Dim dStart As Variant, dEnd As Variant
     dStart = wsSource.Range(SRC_START_DATE).Value
     dEnd = wsSource.Range(SRC_END_DATE).Value
     
@@ -272,122 +255,41 @@ Private Sub TransferData(wsSource As Worksheet, wsDest As Worksheet)
         wsDest.Range(DEST_TERM_START_MONTH).Value = Month(dStart)
         wsDest.Range(DEST_TERM_START_DAY).Value = Day(dStart)
     End If
-    
     wsDest.Range(DEST_TERM_TILDE).Value = "～"
-    
     If IsDate(dEnd) Then
         wsDest.Range(DEST_TERM_END_MONTH).Value = Month(dEnd)
         wsDest.Range(DEST_TERM_END_DAY).Value = Day(dEnd)
-        
         If IsDate(dStart) Then
             If Year(dStart) <> Year(dEnd) Then
                 wsDest.Range(DEST_TERM_END_YEAR).Value = Year(dEnd)
-            Else
-                wsDest.Range(DEST_TERM_END_YEAR).Value = ""
             End If
         End If
     End If
     
-    '--- フォントサイズ調整 ---
-    Dim txtLen As Long
-    txtLen = Len(destRange.Cells(1).Value)
+    '--- フォント調整 ---
+    Dim destRange As Range: Set destRange = wsDest.Range(DEST_DESTINATION)
+    Dim honorRange As Range: Set honorRange = wsDest.Range(DEST_HONORIFIC)
+    Dim txtLen As Long: txtLen = Len(destRange.Cells(1).Value)
     
     destRange.ShrinkToFit = False
-    
     If txtLen > 13 Then
-        destRange.Font.Name = "ＭＳ Ｐゴシック"
-        destRange.Font.Size = 14
-        destRange.ShrinkToFit = True
-        honorificRange.Font.Name = "ＭＳ Ｐゴシック"
-        honorificRange.Font.Size = 14
+        destRange.Font.Size = 14: honorRange.Font.Size = 14
     Else
-        destRange.Font.Name = "ＭＳ Ｐゴシック"
-        destRange.Font.Size = 20
-        destRange.ShrinkToFit = True
-        honorificRange.Font.Name = "ＭＳ Ｐゴシック"
-        honorificRange.Font.Size = 20
+        destRange.Font.Size = 20: honorRange.Font.Size = 20
     End If
+    destRange.ShrinkToFit = True
     
-    '=====================================================
-    ' 【追加】ファイル名・シート名の自動生成ロジック
-    ' フォーマット：請求書番号_請求名_宛先_工事名称_工事番号_担当者
-    '=====================================================
-    Dim strFileName As String
-    Dim sSeikyuName As String
-    
-    ' 請求名（仮で「請求書」としていますが、必要に応じて変えてください）
-    sSeikyuName = "請求書"
-    
-    ' 文字列連結
-    strFileName = wsSource.Range(SRC_KEIRI_NO).Value & "_" & _
-                  sSeikyuName & "_" & _
-                  wsSource.Range(SRC_DESTINATION).Value & "_" & _
-                  wsSource.Range(SRC_PROJECT_NAME).Value & "_" & _
-                  wsSource.Range(SRC_PROJECT_NO).Value & "_" & _
-                  wsSource.Range(SRC_STAFF_NAME).Value
-                  
-    ' 保存時にエラーになる禁止文字を安全な文字に置換
-    strFileName = Replace(strFileName, "/", "／")
-    strFileName = Replace(strFileName, "\", "￥")
-    strFileName = Replace(strFileName, ":", "：")
-    strFileName = Replace(strFileName, "*", "＊")
-    strFileName = Replace(strFileName, "?", "？")
-    strFileName = Replace(strFileName, "<", "＜")
-    strFileName = Replace(strFileName, ">", "＞")
-    strFileName = Replace(strFileName, "|", "｜")
-    
-    ' セルAK1に書き込む（保存モジュールはこのセルを見て保存します）
-    wsDest.Range(DEST_FILENAME_CELL).Value = strFileName
-
+    ' 保存ファイル名生成
+    Dim fn As String: fn = wsSource.Range(SRC_KEIRI_NO).Value & "_請求書_" & destName & "_" & pNo
+    Dim invalid, c: invalid = Array("/", "\", ":", "*", "?", "<", ">", "|")
+    For Each c In invalid: fn = Replace(fn, c, " "): Next
+    wsDest.Range(DEST_FILENAME_CELL).Value = fn
 End Sub
 
-'=========================================================
-' 敬称の判定ロジック（選択式）
-'=========================================================
-Private Function DetermineHonorific(ByVal targetName As String) As String
-    Dim companyKeywords As Variant
-    Dim k As Variant
-    Dim isCompany As Boolean
-    Dim hasSpaceSeparation As Boolean
-    Dim cleanName As String
-    Dim rc As Integer
-
-    companyKeywords = Array("株式会社", "有限会社", "(株)", "(有)", "合同会社", "合資会社", _
-                            "合名会社", "相互会社", "一般社団法人", "公益社団法人", _
-                            "財団法人", "NPO法人", "事業部", "支店", "営業所", "銀行", "金庫", "組合", "医院", "クリニック")
-
-    isCompany = False
-    For Each k In companyKeywords
-        If InStr(targetName, k) > 0 Then
-            isCompany = True
-            Exit For
-        End If
-    Next k
-
-    cleanName = Replace(targetName, "　", " ")
-    cleanName = Trim(cleanName)
-    
-    hasSpaceSeparation = False
-    If InStr(cleanName, " ") > 0 Then
-        hasSpaceSeparation = True
-    End If
-
-    If isCompany And Not hasSpaceSeparation Then
+Private Function DetermineHonorific(ByVal t As String) As String
+    If MsgBox("宛名：「" & t & "」の敬称は『様』でよろしいですか？", vbYesNo + vbQuestion) = vbNo Then
         DetermineHonorific = "御中"
-        Exit Function
-    End If
-    
-    rc = MsgBox("宛名：「" & targetName & "」" & vbCrLf & vbCrLf & _
-                "この宛名の敬称を選択してください。" & vbCrLf & _
-                "（個人名や担当者名が含まれる場合は『様』が一般的です）" & vbCrLf & vbCrLf & _
-                "【はい】　： 様" & vbCrLf & _
-                "【いいえ】： 御中", vbYesNo + vbQuestion, "敬称の確認")
-                
-    If rc = vbYes Then
-        DetermineHonorific = "様"
     Else
-        DetermineHonorific = "御中"
+        DetermineHonorific = "様"
     End If
-
 End Function
-
