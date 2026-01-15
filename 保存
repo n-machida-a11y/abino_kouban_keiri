@@ -1,0 +1,125 @@
+Option Explicit
+
+'=========================================================
+' 設定エリア：保存先やファイル名の設定
+'=========================================================
+' ファイル名として使用するセル（レギュラーな請求書モジュールと合わせる：AK1）
+Private Const CELL_FILENAME As String = "AK1"
+'=========================================================
+
+
+'=========================================================
+' 【メイン】保存実行マクロ
+' 現在のアクティブシートを新しいブックとして保存して閉じます
+'=========================================================
+Sub 保存_印刷作業()
+    Dim targetSheet As Worksheet
+    Dim fileName As String
+    Dim saveFolderPath As String '保存先パス格納用
+    Dim fullPath As String
+    Dim rc As Integer
+    
+    ' 対象は現在開いている（アクティブな）シート
+    Set targetSheet = ActiveSheet
+    
+    ' 【安全装置】システム用のシートを誤って保存しないようにチェック
+    If targetSheet.Name = "依頼検索" Or targetSheet.Name = "作成選択" Or targetSheet.Name = "入力画面" Then
+        MsgBox "このシートは保存できません。" & vbCrLf & _
+               "作成された「請求書シート」を選択してから実行してください。", vbExclamation
+        Exit Sub
+    End If
+
+    ' 1. 保存先パスの取得（依頼検索シートのB1セル）
+    On Error Resume Next
+    saveFolderPath = Worksheets("依頼検索").Range("B1").Value
+    On Error GoTo 0
+    
+    ' 保存先パスのチェック
+    If saveFolderPath = "" Then
+        MsgBox "「依頼検索」シートのB1セル（保存先フォルダ）が空です。" & vbCrLf & _
+               "保存先を入力してから実行してください。", vbExclamation
+        Exit Sub
+    End If
+    ' パス末尾の￥マーク対策（もしついていなければ、あとで付与するのでここでは削除しておくなどの処理も可能だが、
+    ' 今回はそのまま結合時に調整します）
+
+
+    ' 2. ファイル名の取得チェック
+    fileName = targetSheet.Range(CELL_FILENAME).Value
+    If fileName = "" Then
+        MsgBox "ファイル名（" & CELL_FILENAME & "セル）が空のため保存できません。", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 確認メッセージ
+    rc = MsgBox("現在のシートを以下の設定で保存しますか？" & vbCrLf & vbCrLf & _
+                "・ファイル名：" & fileName & vbCrLf & _
+                "・保存先：" & saveFolderPath, vbYesNo + vbQuestion, "保存確認")
+    If rc = vbNo Then Exit Sub
+
+
+    Application.ScreenUpdating = False
+    
+    ' 3. シート名の変更
+    ' シート名を「保存ファイル名」と同じにする
+    On Error Resume Next
+    targetSheet.Name = fileName
+    On Error GoTo 0
+    
+    ' 4. 保存パスの組み立て
+    ' 末尾に \ があるかどうかで結合の仕方を変える（安全策）
+    If Right(saveFolderPath, 1) = "\" Then
+        fullPath = saveFolderPath & fileName
+    Else
+        fullPath = saveFolderPath & "\" & fileName
+    End If
+    
+    ' 5. シートを新しいブックに「移動」させる
+    ' （元のブックからシートがなくなり、新しいブックが作成されます）
+    targetSheet.Move
+    
+    ' 6. 保存実行
+    On Error GoTo SaveError
+    
+    ' 保存形式：マクロなしExcelブック (xlsx)
+    ActiveWorkbook.SaveAs fileName:=fullPath, FileFormat:=xlOpenXMLWorkbook
+    
+    ' 7. 保存したブックを閉じる
+    ActiveWorkbook.Close SaveChanges:=False
+    
+    Application.ScreenUpdating = True
+    
+    ' 元のブックに戻ってきたので完了メッセージ
+    MsgBox "保存が完了しました。", vbInformation
+    Exit Sub
+
+SaveError:
+    Application.ScreenUpdating = True
+    MsgBox "保存中にエラーが発生しました。" & vbCrLf & _
+           "・保存先パス（依頼検索B1）が正しいか" & vbCrLf & _
+           "・フォルダが存在するか" & vbCrLf & _
+           "・同名のファイルが開かれていないか" & vbCrLf & _
+           "確認してください。" & vbCrLf & vbCrLf & _
+           "エラー内容：" & Err.Description, vbCritical
+    ' エラー時は移動したシートが新しいブックとして開いたままになります
+End Sub
+
+
+'=========================================================
+' 【サブ】印刷実行マクロ
+'=========================================================
+Sub 印刷()
+    Dim rc As Integer
+    
+    ' 念のため確認を入れる
+    rc = MsgBox("現在のシートを印刷しますか？", vbYesNo + vbQuestion, "印刷確認")
+    
+    If rc = vbYes Then
+        ' プレビューを表示せずに直接印刷する場合
+        ActiveWindow.SelectedSheets.PrintOut Copies:=1, Collate:=True, IgnorePrintAreas:=False
+        
+        ' ※もしプレビュー画面を出したい場合は以下を使ってください
+        ' ActiveWindow.SelectedSheets.PrintPreview
+    End If
+End Sub
+
